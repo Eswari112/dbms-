@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DBMS Secure Quiz</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; max-width:800px; margin:20px auto; padding:0 16px; }
+    #loginBox, #quizArea, #thankYou { border:1px solid #ddd; padding:18px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.04); }
+    h2{ margin-top:0 }
+    .question{ margin-bottom:14px; }
+    .warning{ color:#b00; font-weight:bold; display:none; margin-bottom:12px; }
+    #timer { font-weight:bold; margin-left:8px; color: #006; }
+    button { padding:8px 14px; border-radius:6px; cursor:pointer; }
+    input[type=text] { width:100%; padding:8px; margin-top:6px; box-sizing:border-box; }
+    #quizContainer { margin-top:10px; }
+    #thankYou { display:none; text-align:center; }
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body oncontextmenu="return false;">
+  <h2>DBMS Secure Quiz</h2>
+
+  <div id="loginBox">
+    <h3>Login to start</h3>
+    <label>Name</label><br>
+    <input id="name" type="text" placeholder="Enter your name" autocomplete="off"><br><br>
+    <label>Register Number (password)</label><br>
+    <input id="regno" type="text" placeholder="Enter register no" autocomplete="off"><br><br>
+    <button id="startBtn">Start Quiz</button>
+    <p style="margin-top:10px; color:#555; font-size:14px">Note: Register number acts as your password. Do NOT switch tabs or minimize — first violation auto-submits.</p>
+  </div>
+
+  <div id="quizArea" class="hidden">
+    <div style="display:flex; align-items:center; justify-content:space-between;">
+      <div>
+        <span>Logged in as: <strong id="displayName"></strong> (<span id="displayReg"></span>)</span>
+      </div>
+      <div>
+        Time left: <span id="timer">30:00</span>
+      </div>
+    </div>
+
+    <p id="warning" class="warning">⚠ Malpractice detected — your quiz was auto-submitted.</p>
+
+    <form id="quizForm">
+      <div id="quizContainer"></div>
+      <div style="margin-top:12px;">
+        <button id="submitBtn" type="submit">Submit Quiz</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="thankYou">
+    <h2>Thank you!</h2>
+    <p id="scoreText"></p>
+    <p>You will be redirected to the home page shortly.</p>
+  </div>
+
+<script>
+/* ====== CONFIG ====== */
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxGTbWDhhmmwhd_Qprg9vrIaA4eL4SwVCNR-stny3ITz6ALKg8ogPYsuUP1Ux6AdgYD/exec";
+const HOME_URL = "https://eswari112.github.io/"; // redirect after malpractice or final submit
+const TOTAL_SECONDS = 30 * 60; // 30 minutes
+
+/* ====== Questions + Answers (provided by you) ======
+   Format: { q: "Question text", answer: "Correct answer (string)" }
+*/
+const QUESTIONS_MASTER = [
+  { q: "What is DBMS?", answer: "A system to manage databases" },
+  { q: "What is mySQL", answer: "A query language" },
+  { q: "What is SQL?", answer: "A query language" },
+  { q: "What is Normalization?", answer: "Organizing data" }
+];
+
+/* ====== App State ====== */
+let shuffledQuestions = [];
+let startTime = null;
+let timerInterval = null;
+let hasSubmitted = false;
+let violated = false;
+let userName = "";
+let userRegNo = "";
+
+/* ====== UTIL ====== */
+function shuffle(array){ return array.sort(()=> Math.random() - 0.5); }
+function formatTime(s){ const m = Math.floor(s/60); const sec = s%60; return `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`; }
+
+/* ====== BUILD UI ====== */
+function buildQuiz() {
+  const container = document.getElementById("quizContainer");
+  container.innerHTML = "";
+  shuffledQuestions = shuffle([...QUESTIONS_MASTER]);
+  shuffledQuestions.forEach((item, idx) => {
+    const div = document.createElement("div");
+    div.className = "question";
+    div.innerHTML = `
+      <label><strong>${idx+1}.</strong> ${item.q}</label>
+      <input type="text" name="q${idx}" data-ans="${item.answer}" required>
+    `;
+    container.appendChild(div);
+  });
+}
+
+/* ====== TIMER ====== */
+function startTimer() {
+  let remaining = TOTAL_SECONDS;
+  document.getElementById("timer").textContent = formatTime(remaining);
+  timerInterval = setInterval(()=>{
+    if (hasSubmitted || violated) { clearInterval(timerInterval); return; }
+    remaining--;
+    document.getElementById("timer").textContent = formatTime(remaining);
+    if (remaining <= 0) {
+      clearInterval(timerInterval);
+      autoSubmit("Auto-Submitted (Time Up)");
+    }
+  }, 1000);
+}
+
+/* ====== SUBMIT TO SHEET ====== */
+function submitToGoogleSheet(name, regno, score, timeSec, status) {
+  // send data; mode no-cors so response can't be read. that's OK.
+  try {
+    fetch(WEB_APP_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name,
+        regno: regno,
+        score: score,
+        time: timeSec,
+        status: status
+      })
+    });
+  } catch(e) {
+    // ignore fetch errors for no-cors
+    console.warn("submit fetch error", e);
+  }
+}
+
+/* ====== SCORE ====== */
+function calculateScore(form) {
+  const inputs = form.querySelectorAll("input[type=text]");
+  let correct = 0;
+  inputs.forEach(inp => {
+    const user = (inp.value || "").trim().toLowerCase();
+    const expected = (inp.getAttribute("data-ans") || "").trim().toLowerCase();
+    if (user === expected && expected !== "") correct++;
+  });
+  return { correct, total: inputs.length };
+}
+
+/* ====== AUTO / NORMAL SUBMIT ====== */
+function finalSubmit(status) {
+  if (hasSubmitted) return;
+  hasSubmitted = true;
+
+  // hide quiz UI, stop timer
+  clearInterval(timerInterval);
+  document.getElementById("quizForm").classList.add("hidden");
+  document.getElementById("warning").classList.remove("hidden");
+  document.getElementById("submitBtn").disabled = true;
+
+  // compute score & time
+  const timeTakenSec = startTime ? Math.floor((Date.now() - startTime)/1000) : 0;
+  const scoreObj = calculateScore(document.getElementById("quizForm"));
+  const scoreText = `${scoreObj.correct} / ${scoreObj.total}`;
+
+  // send to sheet
+  submitToGoogleSheet(userName, userRegNo, scoreText, timeTakenSec, status);
+
+  // show thank you / score page
+  document.getElementById("scoreText").innerHTML = `Your Score: <strong>${scoreText}</strong><br>Time used: ${Math.floor(timeTakenSec/60)} min ${timeTakenSec%60} sec<br>Status: ${status}`;
+  document.getElementById("thankYou").style.display = "block";
+  document.getElementById("quizArea").style.display = "none";
+
+  // redirect to home after a short delay (so teacher can see thank-you)
+  setTimeout(()=> { window.location.href = HOME_URL; }, 6000);
+}
+
+function autoSubmit(status) {
+  violated = true;
+  document.getElementById("warning").textContent = "⚠ Malpractice detected — quiz is being auto-submitted.";
+  document.getElementById("warning").style.display = "block";
+  finalSubmit(status);
+}
+
+/* ====== EVENT HANDLERS ====== */
+document.getElementById("startBtn").addEventListener("click", ()=>{
+  const name = document.getElementById("name").value.trim();
+  const reg = document.getElementById("regno").value.trim();
+  if (!name || !reg) { alert("Enter name and register number"); return; }
+  userName = name; userRegNo = reg;
+  document.getElementById("displayName").textContent = userName;
+  document.getElementById("displayReg").textContent = userRegNo;
+  document.getElementById("loginBox").style.display = "none";
+  document.getElementById("quizArea").classList.remove("hidden");
+  document.getElementById("quizArea").style.display = "block";
+  buildQuiz();
+  startTime = Date.now();
+  startTimer();
+  // try full screen (may be blocked by browser)
+  try { document.documentElement.requestFullscreen(); } catch(e) {}
+});
+
+document.getElementById("quizForm").addEventListener("submit", function(e){
+  e.preventDefault();
+  finalSubmit("Submitted");
+});
+
+/* anti-cheat: detect tab switch / minimize / blur */
+document.addEventListener("visibilitychange", function(){ if (document.hidden && !violated) autoSubmit("Auto-Submitted (Violation)"); });
+window.addEventListener("blur", function(){ if (!violated) autoSubmit("Auto-Submitted (Violation)"); });
+
+/* disable copy/paste/cut/select/contextmenu and common dev shortcuts */
+["copy","paste","cut","selectstart","contextmenu"].forEach(evt => document.addEventListener(evt, e => e.preventDefault()));
+document.addEventListener("keydown", function(e){
+  if (e.keyCode === 123 || // F12
+      (e.ctrlKey && e.shiftKey && e.keyCode === 73) || // Ctrl+Shift+I
+      (e.ctrlKey && e.keyCode === 85) || // Ctrl+U
+      (e.ctrlKey && e.keyCode === 83) || // Ctrl+S
+      (e.ctrlKey && e.keyCode === 80)) { // Ctrl+P
+    e.preventDefault();
+    return false;
+  }
+});
+
+/* try to hide raw code on view-source: this can't be fully prevented */
+</script>
+</body>
+</html>
