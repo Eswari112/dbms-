@@ -59,7 +59,7 @@
 
 <script>
 /* ====== CONFIG ====== */
-const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxGTbWDhhmmwhd_Qprg9vrIaA4eL4SwVCNR-stny3ITz6ALKg8ogPYsuUP1Ux6AdgYD/exec";
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzt3YIGeVyo6t3TEweMOPtelkhLt8IfdO9MnAfJv-sepkqQ306DvY_qOKzeIGEl3-PK/exec";
 const HOME_URL = "https://eswari112.github.io/"; // redirect after malpractice or final submit
 const TOTAL_SECONDS = 30 * 60; // 30 minutes
 
@@ -140,16 +140,67 @@ function submitToGoogleSheet(name, regno, score, timeSec, status) {
 }
 
 /* ====== SCORE ====== */
-function calculateScore(form) {
-  const inputs = form.querySelectorAll("input[type=text]");
-  let correct = 0;
-  inputs.forEach(inp => {
-    const user = (inp.value || "").trim().toLowerCase();
-    const expected = (inp.getAttribute("data-ans") || "").trim().toLowerCase();
-    if (user === expected && expected !== "") correct++;
-  });
-  return { correct, total: inputs.length };
+// ------- FUZZY MATCH HELPER FUNCTION ---------
+function similarity(str1, str2) {
+    str1 = str1.toLowerCase().trim();
+    str2 = str2.toLowerCase().trim();
+
+    let longer = str1.length > str2.length ? str1 : str2;
+    let shorter = str1.length > str2.length ? str2 : str1;
+
+    let longerLength = longer.length;
+    if (longerLength === 0) return 1.0;
+
+    return (longerLength - editDistance(longer, shorter)) / parseFloat(longerLength);
 }
+
+// Levenshtein Distance
+function editDistance(a, b) {
+    a = a.toLowerCase();
+    b = b.toLowerCase();
+
+    const matrix = [];
+
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] =
+                    Math.min(
+                        matrix[i - 1][j - 1] + 1,
+                        matrix[i][j - 1] + 1,
+                        matrix[i - 1][j] + 1
+                    );
+            }
+        }
+    }
+    return matrix[b.length][a.length];
+}
+
+// --------- FUZZY SCORE CALCULATION -----------
+function calculateScore() {
+    let score = 0;
+
+    for (let key in correctAnswers) {
+        let userAns = document.querySelector(`[name="${key}"]`).value.trim();
+        let correctAns = correctAnswers[key];
+
+        let sim = similarity(userAns, correctAns);
+
+        if (sim >= 0.8) {
+            score += 1;  // full mark
+        } 
+        else if (sim >= 0.5) {
+            score += 0.5; // half mark
+        }
+    }
+    return score;
+}
+
 
 /* ====== AUTO / NORMAL SUBMIT ====== */
 function finalSubmit(status) {
@@ -230,3 +281,4 @@ document.addEventListener("keydown", function(e){
 </script>
 </body>
 </html>
+
